@@ -30,7 +30,7 @@ struct Record {
     Record(string h, string s) : header(std::move(h)), seq(std::move(s)) {}
 };
 
-// --------------------- Fast string utilities ---------------------
+// --------------------- Fast string utilities---------------------
 static inline string trim(const string& s) {
     size_t a = s.find_first_not_of(" \t\r\n");
     if (a == string::npos) return "";
