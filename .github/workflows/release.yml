@@ -1,0 +1,109 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            asset_name: dedup-linux
+            target_name: dedup
+          - os: macos-latest
+            asset_name: dedup-macos
+            target_name: dedup
+          - os: windows-latest
+            asset_name: dedup-windows.exe
+            target_name: dedup.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up MSYS2 for Windows
+      if: matrix.os == 'windows-latest'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+
+    - name: Compile
+      shell: msys2 {0}
+      if: matrix.os == 'windows-latest'
+      run: make
+
+    - name: Compile
+      if: matrix.os != 'windows-latest'
+      run: make
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.asset_name }}
+        path: ./${{ matrix.target_name }}
+
+  create-release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to create a release
+
+    steps:
+    - name: Get tag name
+      id: get_tag
+      run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: artifacts/
+
+    - name: List artifacts
+      run: ls -R artifacts
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ env.TAG_NAME }}
+        release_name: Release ${{ env.TAG_NAME }}
+        body: "Automated release of binaries for version ${{ env.TAG_NAME }}."
+        draft: false
+        prerelease: false
+
+    - name: Upload Linux Asset
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./artifacts/dedup-linux/dedup
+        asset_name: dedup-linux
+        asset_content_type: application/octet-stream
+
+    - name: Upload macOS Asset
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./artifacts/dedup-macos/dedup
+        asset_name: dedup-macos
+        asset_content_type: application/octet-stream
+
+    - name: Upload Windows Asset
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./artifacts/dedup-windows.exe/dedup.exe
+        asset_name: dedup-windows.exe
+        asset_content_type: application/vnd.microsoft.portable-executable
