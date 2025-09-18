@@ -1,8 +1,13 @@
 #include <bits/stdc++.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#endif
 
 #ifdef __SSE4_2__
 #include <nmmintrin.h>
@@ -120,12 +125,48 @@ public:
 // --------------------- Memory-mapped FASTA reader ---------------------
 class MemoryMappedFASTA {
 private:
+#ifdef _WIN32
+    HANDLE hFile;
+    HANDLE hMapping;
+#else
     int fd;
+#endif
     char* data;
     size_t file_size;
-    
+
 public:
-    MemoryMappedFASTA(const string& filename) : fd(-1), data(nullptr), file_size(0) {
+    MemoryMappedFASTA(const string& filename) : data(nullptr), file_size(0) {
+#ifdef _WIN32
+        hFile = CreateFileA(filename.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile == INVALID_HANDLE_VALUE) {
+            throw runtime_error("Cannot open file: " + filename);
+        }
+
+        LARGE_INTEGER size_li;
+        if (!GetFileSizeEx(hFile, &size_li)) {
+            CloseHandle(hFile);
+            throw runtime_error("Cannot stat file: " + filename);
+        }
+        file_size = size_li.QuadPart;
+
+        if (file_size == 0) {
+            CloseHandle(hFile);
+            throw runtime_error("Empty file: " + filename);
+        }
+
+        hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+        if (hMapping == NULL) {
+            CloseHandle(hFile);
+            throw runtime_error("Cannot create file mapping: " + filename);
+        }
+
+        data = static_cast<char*>(MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0));
+        if (data == NULL) {
+            CloseHandle(hMapping);
+            CloseHandle(hFile);
+            throw runtime_error("Cannot map file view: " + filename);
+        }
+#else
         fd = open(filename.c_str(), O_RDONLY);
         if (fd == -1) throw runtime_error("Cannot open file: " + filename);
         
@@ -149,15 +190,22 @@ public:
         
         // Advise OS about access pattern
         madvise(data, file_size, MADV_SEQUENTIAL);
+#endif
     }
-    
+
     ~MemoryMappedFASTA() {
+#ifdef _WIN32
+        if (data) UnmapViewOfFile(data);
+        if (hMapping) CloseHandle(hMapping);
+        if (hFile != INVALID_HANDLE_VALUE) CloseHandle(hFile);
+#else
         if (data && data != MAP_FAILED) {
             munmap(data, file_size);
         }
         if (fd != -1) close(fd);
+#endif
     }
-    
+
     vector<Record> parse() {
         vector<Record> records;
         
