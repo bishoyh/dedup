@@ -1,17 +1,7 @@
 # dedup
 
-`dedup` is a high-performance command-line tool for removing duplicate sequences from FASTA files. It can identify and remove sequences that are either identical (100% identity) or highly similar (e.g., 95% identity).
+`dedup` is command-line tool for removing duplicate sequences from FASTA files. It can identify and remove sequences that are either identical (100% identity) or highly similar (e.g., 95% identity).
 
-It is written in C++ and heavily optimized for speed, using techniques like multi-threading, memory-mapped I/O, and SIMD instructions to process large files quickly.
-
-## Features
-
-- **High Performance**: Utilizes modern C++ features and hardware acceleration for rapid processing.
-- **Two Deduplication Modes**:
-    1.  **Exact Duplicates (100% identity)**: A highly optimized mode using a fast hashing algorithm and a concurrent hash table to find and remove sequences that are perfect duplicates.
-    2.  **Similar Sequences (<100% identity)**: Supports removing sequences that meet a certain similarity threshold (80%, 85%, 90%, 95%). This mode uses k-mer indexing and a banded edit distance algorithm.
-- **Multi-threaded**: Scales with the number of available CPU cores to speed up computation.
-- **Cross-Platform**: Compiles and runs on Linux, macOS, and Windows.
 
 ## How to Compile
 
