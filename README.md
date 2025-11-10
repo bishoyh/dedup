@@ -1,4 +1,4 @@
-# removeduplicates
+# dedup
 
 `removeduplicates` is a high-performance command-line tool for removing duplicate sequences from FASTA files. It can identify and remove sequences that are either identical (100% identity) or highly similar (e.g., 95% identity).
 
