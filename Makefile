@@ -1,6 +1,6 @@
 # Compiler and flags
 CXX ?= g++
-CXXFLAGS = -O3 -std=c++17 -pthread -DNDEBUG -flto -ffast-math -msse4.2
+CXXFLAGS = -O3 -std=c++17 -pthread -DNDEBUG -flto -ffast-math -msse4.2 -march=native
 LDFLAGS =
 
 # On Windows, we might need to link against ws2_32 for some compatibility libraries

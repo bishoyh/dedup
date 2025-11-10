@@ -16,7 +16,7 @@
 using namespace std;
 
 // --------------------- Configuration ---------------------
-static constexpr size_t CACHE_LINE_SIZE = 64;
+static constexpr size_t CACHE_LINE_SIZE = 64; //
 static constexpr size_t HASH_TABLE_SIZE = 2097152; // 2M entries, power of 2
 static constexpr uint64_t HASH_EMPTY = 0;
 static constexpr int MAX_BATCH_SIZE = 1000;
@@ -32,9 +32,9 @@ struct Record {
 
 // --------------------- Fast string utilities---------------------
 static inline string trim(const string& s) {
-    size_t a = s.find_first_not_of(" \t\r\n");
+    const size_t a = s.find_first_not_of(" \t\r\n");
     if (a == string::npos) return "";
-    size_t b = s.find_last_not_of(" \t\r\n");
+    const size_t b = s.find_last_not_of(" \t\r\n");
     return s.substr(a, b - a + 1);
 }
 
@@ -45,7 +45,7 @@ static inline string kslice(const string& s, int k) {
 
 // Fast character conversion using lookup table
 static const array<char, 256> TOUPPER_TABLE = []() {
-    array<char, 256> table;
+    array<char, 256> table{};
     for (int i = 0; i < 256; ++i) {
         table[i] = static_cast<char>(toupper(i));
     }
@@ -59,11 +59,10 @@ static inline char fast_toupper(char c) {
 // --------------------- Fast hash functions ---------------------
 // xxHash-inspired fast hash
 static inline uint64_t hash_sequence_fast(const string& s) {
-    const uint64_t PRIME1 = 11400714785074694791ULL;
-    const uint64_t PRIME2 = 14029467366897019727ULL;
-    const uint64_t PRIME3 = 1609587929392839161ULL;
-    const uint64_t PRIME4 = 9650029242287828579ULL;
-    const uint64_t PRIME5 = 2870177450012600261ULL;
+    constexpr uint64_t PRIME1 = 11400714785074694791ULL;
+    constexpr uint64_t PRIME2 = 14029467366897019727ULL;
+    constexpr uint64_t PRIME3 = 1609587929392839161ULL;
+    constexpr uint64_t PRIME5 = 2870177450012600261ULL;
     
     uint64_t hash = PRIME5;
     const char* data = s.data();
@@ -71,6 +70,7 @@ static inline uint64_t hash_sequence_fast(const string& s) {
     
     // Process 8 bytes at a time
     while (len >= 8) {
+        constexpr uint64_t PRIME4 = 9650029242287828579ULL;
         uint64_t val;
         memcpy(&val, data, 8);
         val *= PRIME2;
@@ -107,15 +107,15 @@ private:
     int k;
     
 public:
-    RollingHasher(int kmer_size) : k(kmer_size), base_pow(1) {
+    explicit RollingHasher(const int kmer_size) : base_pow(1), k(kmer_size) {
         for (int i = 0; i < k - 1; ++i) {
             base_pow = (base_pow * BASE) % MOD;
         }
     }
-    
-    uint64_t hash_kmer(const string& kmer) {
+
+    static uint64_t hash_kmer(const string& kmer) {
         uint64_t hash = 0;
-        for (char c : kmer) {
+        for (const char c : kmer) {
             hash = (hash * BASE + static_cast<unsigned char>(c)) % MOD;
         }
         return hash == HASH_EMPTY ? 1 : hash;
@@ -135,7 +135,7 @@ private:
     size_t file_size;
 
 public:
-    MemoryMappedFASTA(const string& filename) : data(nullptr), file_size(0) {
+    explicit MemoryMappedFASTA(const string& filename) : data(nullptr), file_size(0) {
 #ifdef _WIN32
         hFile = CreateFileA(filename.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hFile == INVALID_HANDLE_VALUE) {
@@ -170,7 +170,7 @@ public:
         fd = open(filename.c_str(), O_RDONLY);
         if (fd == -1) throw runtime_error("Cannot open file: " + filename);
         
-        struct stat sb;
+        struct stat sb{};
         if (fstat(fd, &sb) == -1) {
             close(fd);
             throw runtime_error("Cannot stat file: " + filename);
@@ -206,7 +206,7 @@ public:
 #endif
     }
 
-    vector<Record> parse() {
+    [[nodiscard]] vector<Record> parse() const {
         vector<Record> records;
         
         // Quick scan to estimate record count
@@ -307,10 +307,8 @@ public:
         size_t pos = hash & mask;
         
         for (size_t i = 0; i < HASH_TABLE_SIZE; ++i) {
-            uint64_t expected = HASH_EMPTY;
-            
             // Try to insert into empty slot
-            if (table[pos].compare_exchange_weak(expected, hash, memory_order_acq_rel)) {
+            if (uint64_t expected = HASH_EMPTY; table[pos].compare_exchange_weak(expected, hash, memory_order_acq_rel)) {
                 return true; // Successfully inserted
             }
             
@@ -333,8 +331,8 @@ class OptimizedEditDistance {
 public:
     // Quick rejection based on length difference and character frequency
     static bool quick_reject(const string& a, const string& b, int threshold_pct) {
-        int max_len = max(a.size(), b.size());
-        int allowed_edits = (int)ceil((100.0 - threshold_pct) * max_len / 100.0);
+        const int max_len = max(a.size(), b.size());
+        const int allowed_edits = (int)ceil((100.0 - threshold_pct) * max_len / 100.0);
         
         // Length difference check
         if (abs((int)a.size() - (int)b.size()) > allowed_edits) {
@@ -372,11 +370,10 @@ public:
         
         // Process 16 bytes at a time
         while (len >= 16) {
-            __m128i v1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p1));
-            __m128i v2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p2));
-            __m128i cmp = _mm_cmpeq_epi8(v1, v2);
-            
-            if (_mm_movemask_epi8(cmp) != 0xFFFF) {
+            const __m128i v1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p1));
+            const __m128i v2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p2));
+
+            if (__m128i cmp = _mm_cmpeq_epi8(v1, v2); _mm_movemask_epi8(cmp) != 0xFFFF) {
                 return false;
             }
             
@@ -391,16 +388,17 @@ public:
 #endif
     
     // Optimized banded edit distance with early termination
-    static int compute_banded(const string& a, const string& b, int max_edits) {
+    static int compute_banded(const string& a, const string& b, const int max_edits) {
         if (quick_reject(a, b, 100 * (1.0 - (double)max_edits / max(a.size(), b.size())))) {
             return max_edits + 1;
         }
-        
-        int n = a.size(), m = b.size();
+
+        const int n = a.size(); // is there a safer way to do this????
+        const int m = b.size();
         if (abs(n - m) > max_edits) return max_edits + 1;
         
         const int INF = max_edits + 1;
-        int band = max_edits;
+        const int band = max_edits;
         
         vector<int> prev, cur;
         int jmin_prev = max(0, 0 - band);
@@ -413,8 +411,8 @@ public:
         }
         
         for (int i = 1; i <= n; ++i) {
-            int jmin_cur = max(0, i - band);
-            int jmax_cur = min(m, i + band);
+           const int jmin_cur = max(0, i - band);
+            const int jmax_cur = min(m, i + band);
             cur.assign(jmax_cur - jmin_cur + 1, INF);
             int best = INF;
             
@@ -423,20 +421,17 @@ public:
                 
                 // Substitution
                 if (j - 1 >= jmin_prev && j - 1 <= jmax_prev) {
-                    int pv = prev[(j - 1) - jmin_prev];
-                    if (pv != INF) cost_sub = pv + (a[i-1] == b[j-1] ? 0 : 1);
+                    if (int pv = prev[(j - 1) - jmin_prev]; pv != INF) cost_sub = pv + (a[i-1] == b[j-1] ? 0 : 1);
                 }
                 
                 // Deletion
                 if (j >= jmin_prev && j <= jmax_prev) {
-                    int pv = prev[j - jmin_prev];
-                    if (pv != INF) cost_del = pv + 1;
+                    if (const int pv = prev[j - jmin_prev]; pv != INF) cost_del = pv + 1;
                 }
                 
                 // Insertion
                 if (j - 1 >= jmin_cur && j - 1 <= jmax_cur) {
-                    int cv = cur[(j - 1) - jmin_cur];
-                    if (cv != INF) cost_ins = cv + 1;
+                    if (const int cv = cur[(j - 1) - jmin_cur]; cv != INF) cost_ins = cv + 1;
                 }
                 
                 int v = min({cost_sub, cost_del, cost_ins});
@@ -456,9 +451,9 @@ public:
     }
 };
 
-static inline bool identity_at_least(const string& a, const string& b, int pct_threshold) {
-    int max_len = max(a.size(), b.size());
-    int allowed = (int)ceil((100.0 - pct_threshold) * max_len / 100.0);
+static inline bool identity_at_least(const string& a, const string& b, const int pct_threshold) {
+    const int max_len = max(a.size(), b.size());
+    const int allowed = (int)ceil((100.0 - pct_threshold) * max_len / 100.0);
     
     if (abs((int)a.size() - (int)b.size()) > allowed) return false;
     
@@ -467,11 +462,11 @@ static inline bool identity_at_least(const string& a, const string& b, int pct_t
         return OptimizedEditDistance::sequences_equal_simd(a, b);
     }
 #endif
-    
-    int ed = OptimizedEditDistance::compute_banded(a, b, allowed);
+
+    const int ed = OptimizedEditDistance::compute_banded(a, b, allowed);
     if (ed > allowed) return false;
-    
-    double pid = 100.0 * (1.0 - (double)ed / (double)max_len);
+
+    const double pid = 100.0 * (1.0 - (double)ed / (double)max_len);
     return pid + 1e-9 >= pct_threshold;
 }
 
@@ -486,7 +481,7 @@ private:
     size_t batch_size;
     
 public:
-    BatchingQueue(size_t batch_sz = MAX_BATCH_SIZE) : batch_size(batch_sz) {}
+    explicit BatchingQueue(const size_t batch_sz = MAX_BATCH_SIZE) : batch_size(batch_sz) {}
     
     void push(T v) {
         {
@@ -504,8 +499,8 @@ public:
         
         batch.clear();
         batch.reserve(batch_size);
-        
-        size_t count = min(batch_size, dq.size());
+
+        const size_t count = min(batch_size, dq.size());
         for (size_t i = 0; i < count; ++i) {
             batch.push_back(std::move(dq.front()));
             dq.pop_front();
@@ -530,7 +525,7 @@ struct ProcessingState {
     atomic<int> next_order{0};
     atomic<size_t> removed{0};
     
-    ProcessingState(size_t n) : is_kept(n), kept_order(n) {
+    explicit ProcessingState(size_t n) : is_kept(n), kept_order(n) {
         for (size_t i = 0; i < n; ++i) {
             is_kept[i].store(false, memory_order_relaxed);
             kept_order[i].store(-1, memory_order_relaxed);
@@ -568,7 +563,7 @@ void usage(const char* prog) {
     cerr << "  -h          Show this help\n";
 }
 
-Args parse_args(int argc, char** argv) {
+Args parse_args(const int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; i++) {
         string s = argv[i];
@@ -714,7 +709,7 @@ int main(int argc, char** argv) {
                 for (int idx : batch) {
                     const string& s = recs[idx].seq;
                     string key = kslice(s, args.kmer);
-                    size_t shard_id = shard_for_key(key);
+                    const size_t shard_id = shard_for_key(key);
                     Shard& shard = shards[shard_id];
                     
                     bool is_dup = false;
