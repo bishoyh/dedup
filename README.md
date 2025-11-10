@@ -1,6 +1,6 @@
 # dedup
 
-`removeduplicates` is a high-performance command-line tool for removing duplicate sequences from FASTA files. It can identify and remove sequences that are either identical (100% identity) or highly similar (e.g., 95% identity).
+`dedup` is a high-performance command-line tool for removing duplicate sequences from FASTA files. It can identify and remove sequences that are either identical (100% identity) or highly similar (e.g., 95% identity).
 
 It is written in C++ and heavily optimized for speed, using techniques like multi-threading, memory-mapped I/O, and SIMD instructions to process large files quickly.
 
