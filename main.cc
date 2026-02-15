@@ -16,10 +16,7 @@
 using namespace std;
 
 // --------------------- Configuration ---------------------
-static constexpr size_t CACHE_LINE_SIZE = 64; //
-static constexpr size_t HASH_TABLE_SIZE = 2097152; // 2M entries, power of 2
 static constexpr uint64_t HASH_EMPTY = 0;
-static constexpr int MAX_BATCH_SIZE = 1000;
 
 // --------------------- Common structs ---------------------
 struct Record { 
@@ -38,11 +35,6 @@ static inline string trim(const string& s) {
     return s.substr(a, b - a + 1);
 }
 
-static inline string kslice(const string& s, int k) {
-    if ((int)s.size() <= k) return s;
-    return s.substr(0, k);
-}
-
 // Fast character conversion using lookup table
 static const array<char, 256> TOUPPER_TABLE = []() {
     array<char, 256> table{};
@@ -58,16 +50,13 @@ static inline char fast_toupper(char c) {
 
 // --------------------- Fast hash functions ---------------------
 // xxHash-inspired fast hash
-static inline uint64_t hash_sequence_fast(const string& s) {
+static inline uint64_t hash_bytes_fast(const char* data, size_t len) {
     constexpr uint64_t PRIME1 = 11400714785074694791ULL;
     constexpr uint64_t PRIME2 = 14029467366897019727ULL;
     constexpr uint64_t PRIME3 = 1609587929392839161ULL;
     constexpr uint64_t PRIME5 = 2870177450012600261ULL;
     
     uint64_t hash = PRIME5;
-    const char* data = s.data();
-    size_t len = s.size();
-    
     // Process 8 bytes at a time
     while (len >= 8) {
         constexpr uint64_t PRIME4 = 9650029242287828579ULL;
@@ -98,29 +87,9 @@ static inline uint64_t hash_sequence_fast(const string& s) {
     return hash == HASH_EMPTY ? 1 : hash;
 }
 
-// Rolling hash for k-mers
-class RollingHasher {
-private:
-    static constexpr uint64_t BASE = 257;
-    static constexpr uint64_t MOD = (1ULL << 61) - 1;
-    uint64_t base_pow;
-    int k;
-    
-public:
-    explicit RollingHasher(const int kmer_size) : base_pow(1), k(kmer_size) {
-        for (int i = 0; i < k - 1; ++i) {
-            base_pow = (base_pow * BASE) % MOD;
-        }
-    }
-
-    static uint64_t hash_kmer(const string& kmer) {
-        uint64_t hash = 0;
-        for (const char c : kmer) {
-            hash = (hash * BASE + static_cast<unsigned char>(c)) % MOD;
-        }
-        return hash == HASH_EMPTY ? 1 : hash;
-    }
-};
+static inline uint64_t hash_sequence_fast(const string& s) {
+    return hash_bytes_fast(s.data(), s.size());
+}
 
 // --------------------- Memory-mapped FASTA reader ---------------------
 class MemoryMappedFASTA {
@@ -287,75 +256,32 @@ vector<Record> read_fasta_stream(const string& filename) {
     return recs;
 }
 
-// --------------------- Lock-free hash set ---------------------
-class alignas(CACHE_LINE_SIZE) LockFreeHashSet {
-private:
-    vector<atomic<uint64_t>> table;
-    size_t mask;
-    
-public:
-    LockFreeHashSet() : table(HASH_TABLE_SIZE), mask(HASH_TABLE_SIZE - 1) {
-        for (auto& slot : table) {
-            slot.store(HASH_EMPTY, memory_order_relaxed);
-        }
-    }
-    
-    // Returns true if hash was newly inserted, false if it was already present
-    bool insert_if_new(uint64_t hash) {
-        if (hash == HASH_EMPTY) hash = 1;
-        
-        size_t pos = hash & mask;
-        
-        for (size_t i = 0; i < HASH_TABLE_SIZE; ++i) {
-            // Try to insert into empty slot
-            if (uint64_t expected = HASH_EMPTY; table[pos].compare_exchange_weak(expected, hash, memory_order_acq_rel)) {
-                return true; // Successfully inserted
-            }
-            
-            // Check if already exists
-            if (table[pos].load(memory_order_acquire) == hash) {
-                return false; // Already exists
-            }
-            
-            // Linear probing
-            pos = (pos + 1) & mask;
-        }
-        
-        // Hash table full (very unlikely) - assume it's new to avoid data loss
-        return true;
-    }
-};
-
 // --------------------- Optimized edit distance ---------------------
 class OptimizedEditDistance {
 public:
-    // Quick rejection based on length difference and character frequency
-    static bool quick_reject(const string& a, const string& b, int threshold_pct) {
-        const int max_len = max(a.size(), b.size());
-        const int allowed_edits = (int)ceil((100.0 - threshold_pct) * max_len / 100.0);
-        
-        // Length difference check
-        if (abs((int)a.size() - (int)b.size()) > allowed_edits) {
+    // Quick rejection based on length difference and character frequency.
+    static bool quick_reject_by_edits(const string& a, const string& b, const int max_edits) {
+        if (abs((int)a.size() - (int)b.size()) > max_edits) {
             return true;
         }
-        
-        // For high similarity thresholds, do character frequency check
-        if (threshold_pct >= 90 && max_len > 50) {
+
+        const int max_len = max(a.size(), b.size());
+        if (max_len > 50) {
             array<int, 256> freq_diff = {0};
-            
+
             for (char c : a) freq_diff[static_cast<unsigned char>(c)]++;
             for (char c : b) freq_diff[static_cast<unsigned char>(c)]--;
-            
+
             int total_diff = 0;
             for (int f : freq_diff) {
                 total_diff += abs(f);
             }
-            
-            if (total_diff / 2 > allowed_edits) {
+
+            if (total_diff / 2 > max_edits) {
                 return true;
             }
         }
-        
+
         return false;
     }
     
@@ -389,12 +315,12 @@ public:
     
     // Optimized banded edit distance with early termination
     static int compute_banded(const string& a, const string& b, const int max_edits) {
-        if (quick_reject(a, b, 100 * (1.0 - (double)max_edits / max(a.size(), b.size())))) {
+        if (quick_reject_by_edits(a, b, max_edits)) {
             return max_edits + 1;
         }
 
-        const int n = a.size(); // is there a safer way to do this????
-        const int m = b.size();
+        const int n = (int)a.size();
+        const int m = (int)b.size();
         if (abs(n - m) > max_edits) return max_edits + 1;
         
         const int INF = max_edits + 1;
@@ -453,6 +379,7 @@ public:
 
 static inline bool identity_at_least(const string& a, const string& b, const int pct_threshold) {
     const int max_len = max(a.size(), b.size());
+    if (max_len == 0) return true;
     const int allowed = (int)ceil((100.0 - pct_threshold) * max_len / 100.0);
     
     if (abs((int)a.size() - (int)b.size()) > allowed) return false;
@@ -470,78 +397,77 @@ static inline bool identity_at_least(const string& a, const string& b, const int
     return pid + 1e-9 >= pct_threshold;
 }
 
-// --------------------- Thread-safe queue with batching ---------------------
-template<typename T>
-class BatchingQueue {
-private:
-    deque<T> dq;
-    mutex mx;
-    condition_variable cv;
-    bool done = false;
-    size_t batch_size;
-    
-public:
-    explicit BatchingQueue(const size_t batch_sz = MAX_BATCH_SIZE) : batch_size(batch_sz) {}
-    
-    void push(T v) {
-        {
-            lock_guard<mutex> lk(mx);
-            dq.push_back(std::move(v));
-        }
-        cv.notify_one();
-    }
-    
-    bool pop_batch(vector<T>& batch) {
-        unique_lock<mutex> lk(mx);
-        cv.wait(lk, [&]{ return done || !dq.empty(); });
-        
-        if (dq.empty()) return false;
-        
-        batch.clear();
-        batch.reserve(batch_size);
+static inline bool sequences_equal_fast(const string& a, const string& b) {
+#ifdef __SSE4_2__
+    return OptimizedEditDistance::sequences_equal_simd(a, b);
+#else
+    return a == b;
+#endif
+}
 
-        const size_t count = min(batch_size, dq.size());
-        for (size_t i = 0; i < count; ++i) {
-            batch.push_back(std::move(dq.front()));
-            dq.pop_front();
-        }
-        
-        return true;
-    }
-    
-    void close() {
-        {
-            lock_guard<mutex> lk(mx);
-            done = true;
-        }
-        cv.notify_all();
-    }
-};
+static vector<uint64_t> compute_hashes_parallel(const vector<Record>& recs, int threads) {
+    vector<uint64_t> hashes(recs.size(), 1);
+    if (recs.empty()) return hashes;
 
-// --------------------- Processing state ---------------------
-struct ProcessingState {
-    vector<atomic<bool>> is_kept;
-    vector<atomic<int>> kept_order;
-    atomic<int> next_order{0};
-    atomic<size_t> removed{0};
-    
-    explicit ProcessingState(size_t n) : is_kept(n), kept_order(n) {
-        for (size_t i = 0; i < n; ++i) {
-            is_kept[i].store(false, memory_order_relaxed);
-            kept_order[i].store(-1, memory_order_relaxed);
+    const int worker_count = min<int>(max(1, threads), recs.size());
+    if (worker_count == 1) {
+        for (size_t i = 0; i < recs.size(); ++i) {
+            hashes[i] = hash_sequence_fast(recs[i].seq);
         }
+        return hashes;
     }
-};
 
-// --------------------- Sharded index for <100% identity ---------------------
-struct alignas(CACHE_LINE_SIZE) Shard {
-    unordered_map<string, vector<int>> prefix_index;
-    shared_mutex mtx;
-    
-    Shard() {
-        prefix_index.reserve(1024);
+    vector<thread> workers;
+    workers.reserve(worker_count);
+    const size_t block = (recs.size() + worker_count - 1) / worker_count;
+    for (int w = 0; w < worker_count; ++w) {
+        const size_t start = w * block;
+        const size_t stop = min(recs.size(), start + block);
+        if (start >= stop) break;
+        workers.emplace_back([&, start, stop] {
+            for (size_t i = start; i < stop; ++i) {
+                hashes[i] = hash_sequence_fast(recs[i].seq);
+            }
+        });
     }
-};
+    for (auto& worker : workers) worker.join();
+    return hashes;
+}
+
+static pair<int, int> feasible_length_bounds(const int len, const int pct_threshold) {
+    if (len == 0) return {0, 0};
+    const double ratio = pct_threshold / 100.0;
+    const int min_len = max(0, (int)ceil(len * ratio - 1e-12));
+    const int max_len = (int)floor(len / ratio + 1e-12);
+    return {min_len, max_len};
+}
+
+static vector<uint64_t> sequence_seed_hashes(const string& seq, const int k) {
+    vector<uint64_t> seeds;
+    if (seq.empty()) {
+        seeds.push_back(1);
+        return seeds;
+    }
+
+    const int n = (int)seq.size();
+    if (n <= k) {
+        seeds.push_back(hash_sequence_fast(seq));
+        return seeds;
+    }
+
+    const int stride = max(1, k / 2);
+    for (int pos = 0; pos + k <= n; pos += stride) {
+        seeds.push_back(hash_bytes_fast(seq.data() + pos, k));
+    }
+    const int tail = n - k;
+    if (tail % stride != 0) {
+        seeds.push_back(hash_bytes_fast(seq.data() + tail, k));
+    }
+
+    sort(seeds.begin(), seeds.end());
+    seeds.erase(unique(seeds.begin(), seeds.end()), seeds.end());
+    return seeds;
+}
 
 // --------------------- Arguments ---------------------
 struct Args {
@@ -567,11 +493,22 @@ Args parse_args(const int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; i++) {
         string s = argv[i];
-        if (s == "-i" && i + 1 < argc) a.in_path = argv[++i];
-        else if (s == "-o" && i + 1 < argc) a.out_path = argv[++i];
-        else if (s == "-p" && i + 1 < argc) a.pct = stoi(argv[++i]);
-        else if (s == "-k" && i + 1 < argc) a.kmer = stoi(argv[++i]);
-        else if (s == "-t" && i + 1 < argc) a.threads = stoi(argv[++i]);
+        if (s == "-i" && i + 1 < argc) {
+            a.in_path = argv[++i];
+        } else if (s == "-o" && i + 1 < argc) {
+            a.out_path = argv[++i];
+        } else if ((s == "-p" || s == "-k" || s == "-t") && i + 1 < argc) {
+            const char* value = argv[++i];
+            try {
+                const int parsed = stoi(value);
+                if (s == "-p") a.pct = parsed;
+                else if (s == "-k") a.kmer = parsed;
+                else a.threads = parsed;
+            } catch (const exception&) {
+                cerr << "Invalid numeric value for " << s << ": " << value << "\n";
+                exit(1);
+            }
+        }
         else if (s == "-h" || s == "--help") { usage(argv[0]); exit(0); }
         else { 
             cerr << "Unknown or incomplete option: " << s << "\n"; 
@@ -643,149 +580,100 @@ int main(int argc, char** argv) {
     
     cerr << "Loaded " << recs.size() << " sequences\n";
     
-    // Initialize processing state
-    ProcessingState state(recs.size());
-    
-    // Work queue for batched processing
-    BatchingQueue<int> work_queue;
-    
+    vector<int> kept_indices;
+    kept_indices.reserve(recs.size());
+    size_t removed_count = 0;
+
     if (args.pct == 100) {
-        // 100% identity case - use lock-free hash set
-        LockFreeHashSet global_hash_set;
-        
-        auto worker = [&](int tid) {
-            vector<int> batch;
-            while (work_queue.pop_batch(batch)) {
-                for (int idx : batch) {
-                    uint64_t hash = hash_sequence_fast(recs[idx].seq);
-                    
-                    if (global_hash_set.insert_if_new(hash)) {
-                        // New sequence
-                        state.is_kept[idx].store(true, memory_order_relaxed);
-                        state.kept_order[idx].store(
-                            state.next_order.fetch_add(1, memory_order_relaxed), 
-                            memory_order_relaxed
-                        );
-                    } else {
-                        // Duplicate
-                        state.removed.fetch_add(1, memory_order_relaxed);
-                    }
+        const vector<uint64_t> seq_hashes = compute_hashes_parallel(recs, args.threads);
+        unordered_map<uint64_t, vector<int>> hash_to_kept;
+        hash_to_kept.reserve(recs.size() * 2);
+
+        for (int i = 0; i < (int)recs.size(); ++i) {
+            bool is_dup = false;
+            auto& bucket = hash_to_kept[seq_hashes[i]];
+            for (const int candidate_idx : bucket) {
+                if (sequences_equal_fast(recs[i].seq, recs[candidate_idx].seq)) {
+                    is_dup = true;
+                    break;
                 }
             }
-        };
-        
-        // Launch workers
-        vector<thread> workers;
-        workers.reserve(args.threads);
-        for (int t = 0; t < args.threads; ++t) {
-            workers.emplace_back(worker, t);
+
+            if (is_dup) {
+                ++removed_count;
+            } else {
+                bucket.push_back(i);
+                kept_indices.push_back(i);
+            }
         }
-        
-        // Enqueue work
-        for (int i = 0; i < (int)recs.size(); ++i) {
-            work_queue.push(i);
-        }
-        work_queue.close();
-        
-        // Wait for completion
-        for (auto& w : workers) {
-            w.join();
-        }
-        
     } else {
-        // <100% identity case - use sharded indexing
-        int shard_count = max(args.threads * 4, 16);
-        vector<Shard> shards(shard_count);
-        
-        auto shard_for_key = [&](const string& key) -> size_t {
-            return hash<string>{}(key) % shard_count;
-        };
-        
-        auto worker = [&](int tid) {
-            RollingHasher hasher(args.kmer);
-            vector<int> batch;
-            
-            while (work_queue.pop_batch(batch)) {
-                for (int idx : batch) {
-                    const string& s = recs[idx].seq;
-                    string key = kslice(s, args.kmer);
-                    const size_t shard_id = shard_for_key(key);
-                    Shard& shard = shards[shard_id];
-                    
-                    bool is_dup = false;
-                    
-                    // Check against candidates in this shard
-                    {
-                        shared_lock<shared_mutex> rl(shard.mtx);
-                        auto it = shard.prefix_index.find(key);
-                        if (it != shard.prefix_index.end()) {
-                            for (int candidate_idx : it->second) {
-                                if (state.is_kept[candidate_idx].load(memory_order_acquire)) {
-                                    if (identity_at_least(s, recs[candidate_idx].seq, args.pct)) {
-                                        is_dup = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    if (is_dup) {
-                        state.removed.fetch_add(1, memory_order_relaxed);
-                    } else {
-                        // Add to index and mark as kept
-                        {
-                            unique_lock<shared_mutex> wl(shard.mtx);
-                            shard.prefix_index[key].push_back(idx);
-                        }
-                        
-                        state.is_kept[idx].store(true, memory_order_relaxed);
-                        state.kept_order[idx].store(
-                            state.next_order.fetch_add(1, memory_order_relaxed),
-                            memory_order_relaxed
-                        );
-                    }
+        unordered_map<uint64_t, vector<int>> seed_index;
+        seed_index.reserve(recs.size() * 2);
+        map<int, vector<int>> kept_by_length;
+        vector<int> seen_stamp(recs.size(), 0);
+        int stamp = 1;
+        vector<int> candidates;
+        candidates.reserve(256);
+
+        for (int i = 0; i < (int)recs.size(); ++i) {
+            const string& seq = recs[i].seq;
+            const int seq_len = (int)seq.size();
+            bool is_dup = false;
+            ++stamp;
+            if (stamp == INT_MAX) {
+                fill(seen_stamp.begin(), seen_stamp.end(), 0);
+                stamp = 1;
+            }
+            candidates.clear();
+
+            const vector<uint64_t> seeds = sequence_seed_hashes(seq, args.kmer);
+            for (const uint64_t seed : seeds) {
+                auto it = seed_index.find(seed);
+                if (it == seed_index.end()) continue;
+                for (const int candidate_idx : it->second) {
+                    if (seen_stamp[candidate_idx] == stamp) continue;
+                    seen_stamp[candidate_idx] = stamp;
+                    candidates.push_back(candidate_idx);
                 }
             }
-        };
-        
-        // Launch workers
-        vector<thread> workers;
-        workers.reserve(args.threads);
-        for (int t = 0; t < args.threads; ++t) {
-            workers.emplace_back(worker, t);
-        }
-        
-        // Enqueue work
-        for (int i = 0; i < (int)recs.size(); ++i) {
-            work_queue.push(i);
-        }
-        work_queue.close();
-        
-        // Wait for completion
-        for (auto& w : workers) {
-            w.join();
+
+            for (const int candidate_idx : candidates) {
+                if (identity_at_least(seq, recs[candidate_idx].seq, args.pct)) {
+                    is_dup = true;
+                    break;
+                }
+            }
+
+            if (!is_dup) {
+                const auto [min_len, max_len] = feasible_length_bounds(seq_len, args.pct);
+                for (auto it = kept_by_length.lower_bound(min_len); it != kept_by_length.end() && it->first <= max_len; ++it) {
+                    for (const int candidate_idx : it->second) {
+                        if (seen_stamp[candidate_idx] == stamp) continue;
+                        if (identity_at_least(seq, recs[candidate_idx].seq, args.pct)) {
+                            is_dup = true;
+                            break;
+                        }
+                    }
+                    if (is_dup) break;
+                }
+            }
+
+            if (is_dup) {
+                ++removed_count;
+            } else {
+                kept_indices.push_back(i);
+                kept_by_length[seq_len].push_back(i);
+                for (const uint64_t seed : seeds) {
+                    seed_index[seed].push_back(i);
+                }
+            }
         }
     }
-    
-    // Collect results in order
-    vector<pair<int, int>> kept_with_order; // (order, index)
-    kept_with_order.reserve(recs.size());
-    
-    for (size_t i = 0; i < recs.size(); ++i) {
-        if (state.is_kept[i].load(memory_order_relaxed)) {
-            int order = state.kept_order[i].load(memory_order_relaxed);
-            kept_with_order.emplace_back(order, i);
-        }
-    }
-    
-    // Sort by order to maintain original sequence
-    sort(kept_with_order.begin(), kept_with_order.end());
-    
-    // Build final result
+
+    // Build final result in original input order.
     vector<Record> kept_records;
-    kept_records.reserve(kept_with_order.size());
-    for (const auto& [order, idx] : kept_with_order) {
+    kept_records.reserve(kept_indices.size());
+    for (const int idx : kept_indices) {
         kept_records.push_back(std::move(recs[idx]));
     }
     
@@ -799,13 +687,12 @@ int main(int argc, char** argv) {
     
     // Report statistics
     size_t kept_count = kept_records.size();
-    size_t removed_count = state.removed.load(memory_order_relaxed);
     
     cerr << "Input sequences:  " << recs.size() << "\n";
     cerr << "Kept sequences:   " << kept_count << "\n";
     cerr << "Removed sequences:" << removed_count << "\n";
     cerr << "Threshold:        " << args.pct << "% identity\n";
-    if (args.pct < 100) cerr << "Prefix k-mer:     " << args.kmer << "\n";
+    if (args.pct < 100) cerr << "Seed k-mer:       " << args.kmer << "\n";
     cerr << "Threads:          " << args.threads << "\n";
     
     return 0;

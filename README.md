@@ -26,6 +26,12 @@ make
 
 This will produce an executable named `dedup` (or `dedup.exe` on Windows).
 
+To run smoke tests:
+
+```bash
+make test
+```
+
 ## Usage
 
 The tool is run from the command line with the following options:

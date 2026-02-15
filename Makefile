@@ -21,8 +21,12 @@ all: $(TARGET)
 $(TARGET): $(SRC)
 	$(CXX) $(CXXFLAGS) -o $(TARGET) $(SRC) $(LDFLAGS)
 
+# Smoke tests
+test: $(TARGET)
+	./tests/smoke.sh
+
 # Clean up
 clean:
 	rm -f $(TARGET)
 
-.PHONY: all clean
+.PHONY: all test clean
