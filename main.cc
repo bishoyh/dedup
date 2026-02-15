@@ -609,7 +609,7 @@ int main(int argc, char** argv) {
     } else {
         unordered_map<uint64_t, vector<int>> seed_index;
         seed_index.reserve(recs.size() * 2);
-        map<int, vector<int>> kept_by_length;
+        map<int, vector<int>> kept_short_by_length;
         vector<int> seen_stamp(recs.size(), 0);
         int stamp = 1;
         vector<int> candidates;
@@ -644,9 +644,10 @@ int main(int argc, char** argv) {
                 }
             }
 
-            if (!is_dup) {
+            // Short sequences have fewer seed opportunities; do a bounded fallback scan.
+            if (!is_dup && seq_len < args.kmer) {
                 const auto [min_len, max_len] = feasible_length_bounds(seq_len, args.pct);
-                for (auto it = kept_by_length.lower_bound(min_len); it != kept_by_length.end() && it->first <= max_len; ++it) {
+                for (auto it = kept_short_by_length.lower_bound(min_len); it != kept_short_by_length.end() && it->first <= max_len; ++it) {
                     for (const int candidate_idx : it->second) {
                         if (seen_stamp[candidate_idx] == stamp) continue;
                         if (identity_at_least(seq, recs[candidate_idx].seq, args.pct)) {
@@ -662,7 +663,9 @@ int main(int argc, char** argv) {
                 ++removed_count;
             } else {
                 kept_indices.push_back(i);
-                kept_by_length[seq_len].push_back(i);
+                if (seq_len < args.kmer) {
+                    kept_short_by_length[seq_len].push_back(i);
+                }
                 for (const uint64_t seed : seeds) {
                     seed_index[seed].push_back(i);
                 }
