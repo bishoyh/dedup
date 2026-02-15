@@ -455,13 +455,20 @@ static vector<uint64_t> sequence_seed_hashes(const string& seq, const int k) {
         return seeds;
     }
 
-    const int stride = max(1, k / 2);
-    for (int pos = 0; pos + k <= n; pos += stride) {
+    // Use a small fixed number of spaced seeds to reduce indexing overhead.
+    // This keeps candidate recall high for near-duplicates while avoiding many
+    // per-record hash insertions on large datasets.
+    constexpr int TARGET_SEEDS = 5;
+    const int max_start = n - k;
+    const int step = max(1, max_start / (TARGET_SEEDS - 1));
+
+    seeds.reserve(TARGET_SEEDS);
+    for (int pos = 0; pos <= max_start && (int)seeds.size() < TARGET_SEEDS; pos += step) {
         seeds.push_back(hash_bytes_fast(seq.data() + pos, k));
     }
-    const int tail = n - k;
-    if (tail % stride != 0) {
-        seeds.push_back(hash_bytes_fast(seq.data() + tail, k));
+    const uint64_t tail_hash = hash_bytes_fast(seq.data() + max_start, k);
+    if (seeds.empty() || seeds.back() != tail_hash) {
+        seeds.push_back(tail_hash);
     }
 
     sort(seeds.begin(), seeds.end());
