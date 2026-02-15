@@ -1,4 +1,26 @@
-#include <bits/stdc++.h>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cctype>
+#include <climits>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <condition_variable>
+#include <deque>
+#include <exception>
+#include <fstream>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <mutex>
+#include <shared_mutex>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
